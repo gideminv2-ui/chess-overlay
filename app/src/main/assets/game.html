@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#1b1b19;color:#ecebe5;font-family:system-ui,sans-serif;overflow:hidden}
+body{display:flex;flex-direction:column}
+#eng{font-size:10px;color:#9b9a92;padding:3px 6px 0}
+#st{font-size:13px;font-weight:600;padding:1px 6px 4px;min-height:20px}
+#board{display:grid;grid-template-columns:repeat(8,1fr);width:100vw;aspect-ratio:1;flex:none;user-select:none}
+.sq{position:relative;display:flex;align-items:center;justify-content:center;font-size:10.4vw;line-height:1}
+.l{background:#b8b8a0}.d{background:#5a7a44}
+.sel{background:#f6f669!important}
+.last::after{content:"";position:absolute;inset:0;background:rgba(255,214,0,.38)}
+.dot::before{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:rgba(0,0,0,.3);z-index:2}
+.sq span{position:relative;z-index:1}
+.w{color:#fff;text-shadow:0 0 2px #000,0 0 2px #000,0 0 1px #000}
+.b{color:#111;text-shadow:0 0 1px rgba(255,255,255,.4)}
+.row{display:flex;gap:6px;padding:6px}
+button,select{flex:1;font:inherit;font-size:12px;padding:9px 4px;border-radius:8px;border:1px solid #3a3a36;background:#262624;color:#ecebe5}
+button:disabled{opacity:.45}
+.p{background:#5fa77f;color:#111;border-color:transparent;font-weight:600}
+#ov{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;flex-direction:column;justify-content:center;gap:10px;padding:22px;text-align:center;z-index:5}
+#ov[hidden]{display:none}
+#ov h2{margin:0 0 4px;font-size:18px}
+#ov button{flex:none;padding:14px;font-size:15px}
+</style></head>
+<body>
+<div id="eng">Загружаю движок…</div>
+<div id="st">Загрузка…</div>
+<div id="board"></div>
+<div class="row"><button id="b1">↶ 1 ход</button><button id="b3">↶ 3 хода</button><button id="b5">↶ 5 ходов</button></div>
+<div class="row">
+<select id="tm"><option value="1000">1 с</option><option value="3000" selected>3 с</option><option value="6000">6 с</option><option value="10000">10 с</option></select>
+<button id="flip">⇅</button><button id="new" class="p">Новая игра</button>
+</div>
+<div id="ov" hidden>
+<h2>За кого играете?</h2>
+<button class="p" data-c="w">♔ Белыми</button>
+<button class="p" data-c="b">♚ Чёрными</button>
+<button data-c="r">Случайно</button>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const G={p:"♟",n:"♞",b:"♝",r:"♜",q:"♛",k:"♚"};
+const SFCDN="https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js";
+const CJSCDN="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js";
+let g=null,me="w",sel=null,flip=false,last=null,busy=false,engP=null,onLine=()=>{};
+
+const load=u=>new Promise((ok,no)=>{const s=document.createElement("script");s.src=u;s.onload=ok;s.onerror=no;document.head.appendChild(s)});
+
+function tryWorker(make){return new Promise(ok=>{let w,done=false,t;
+ const fin=r=>{if(done)return;done=true;clearTimeout(t);ok(r?w:null)};
+ try{w=make()}catch(e){return ok(null)}
+ t=setTimeout(()=>fin(false),10000);
+ w.onerror=()=>fin(false);
+ w.onmessage=e=>{if(typeof e.data==="string"&&e.data.indexOf("uciok")>=0)fin(true)};
+ w.postMessage("uci")})}
+async function initEngine(){
+ let w=await tryWorker(()=>new Worker("stockfish.js"));
+ if(!w)w=await tryWorker(()=>new Worker(URL.createObjectURL(new Blob(['importScripts("'+SFCDN+'")'],{type:"text/javascript"}))));
+ return w}
+
+(async()=>{
+ try{await load("chess.min.js")}catch(e){try{await load(CJSCDN)}catch(e2){$("st").textContent="Нет chess.js: нужен интернет";return}}
+ g=new Chess();
+ engP=initEngine().then(w=>{
+  if(w){w.onmessage=e=>onLine(e.data);w.postMessage("setoption name Skill Level value 20");w.postMessage("ucinewgame")}
+  $("eng").textContent=w?"Stockfish: максимальный уровень":"Stockfish не загружен: нужен интернет при первом запуске";
+  return w});
+ $("ov").hidden=false;render()})();
+
+async function engineMove(){
+ if(!g||g.game_over()||g.turn()===me)return;
+ busy=true;ui();
+ const w=await engP;
+ if(!w){busy=false;ui();$("st").textContent="Движок не загружен";return}
+ const ms=$("tm").value;
+ const u=await new Promise(res=>{const t=setTimeout(()=>res(null),+ms+20000);
+  onLine=l=>{if(typeof l==="string"&&l.indexOf("bestmove")===0){clearTimeout(t);res(l.split(" ")[1])}};
+  w.postMessage("position fen "+g.fen());w.postMessage("go movetime "+ms)});
+ if(u&&u!=="(none)"){g.move({from:u.slice(0,2),to:u.slice(2,4),promotion:u[4]});setLast()}
+ busy=false;sel=null;render()}
+
+function setLast(){const h=g.history({verbose:true}),m=h[h.length-1];last=m?{from:m.from,to:m.to}:null}
+function ui(){["b1","b3","b5","new"].forEach(id=>$(id).disabled=busy);
+ let t;if(g.in_checkmate())t=g.turn()===me?"Мат. Вы проиграли":"Мат. Вы победили!";
+ else if(g.in_draw())t="Ничья";else if(busy)t="Stockfish думает…";else t="Ваш ход"+(g.in_check()?" — шах":"");
+ $("st").textContent=t}
+function render(){const B=$("board");B.innerHTML="";
+ const legal=sel?g.moves({square:sel,verbose:true}).map(m=>m.to):[];
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  const f=flip?7-c:c,rk=flip?r:7-r,s="abcdefgh"[f]+(rk+1),p=g.get(s),e=document.createElement("div");
+  e.className="sq "+((f+rk)%2?"l":"d");
+  if(s===sel)e.classList.add("sel");
+  if(legal.includes(s))e.classList.add("dot");
+  if(last&&(s===last.from||s===last.to))e.classList.add("last");
+  if(p){const i=document.createElement("span");i.className=p.color;i.textContent=G[p.type];e.appendChild(i)}
+  e.onclick=()=>tap(s);B.appendChild(e)}
+ ui()}
+function tap(s){if(!g||busy||g.game_over()||g.turn()!==me)return;
+ if(sel&&sel!==s){const m=g.move({from:sel,to:s,promotion:"q"});
+  if(m){sel=null;setLast();render();setTimeout(engineMove,40);return}}
+ const p=g.get(s);sel=p&&p.color===me?s:null;render()}
+function back(n){if(!g||busy)return;let k=n*2;
+ while(k-->0&&g.history().length)g.undo();
+ if(g.turn()!==me&&g.history().length)g.undo();
+ sel=null;setLast();render();if(g.turn()!==me)engineMove()}
+function start(c){me=c;flip=c==="b";g.reset();last=null;sel=null;$("ov").hidden=true;render();engineMove()}
+
+document.querySelectorAll("#ov button").forEach(b=>b.onclick=()=>{let c=b.dataset.c;if(c==="r")c=Math.random()<.5?"w":"b";start(c)});
+$("b1").onclick=()=>back(1);$("b3").onclick=()=>back(3);$("b5").onclick=()=>back(5);
+$("flip").onclick=()=>{if(g){flip=!flip;render()}};
+$("new").onclick=()=>{$("ov").hidden=false};
+</script>
+</body></html>
